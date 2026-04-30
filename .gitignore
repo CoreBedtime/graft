@@ -1,0 +1,33 @@
+# Build & Output
+/output/
+/build/
+/temp/
+AGENTS.md
+libprotein_render.m
+
+# C / Compilation Artifacts
+*.o
+*.a
+*.dylib
+*.dSYM/
+*.out
+
+# Node / JS (even though vendored, good to ignore in case of accidental local runs)
+node_modules/
+npm-debug.log*
+package-lock.json
+yarn.lock
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursor/
