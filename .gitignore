@@ -31,3 +31,5 @@ Icon?
 *.swp
 *.swo
 .cursor/
+launch_wip.m
+xpcproxy.m

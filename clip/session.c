@@ -17,16 +17,144 @@ struct _SessionManager {
     GHashTable *sessions; // pid_t -> TargetSession*
 };
 
+static const gchar *skip_json_ws(const gchar *p)
+{
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+static gchar *decode_json_string(const gchar *p)
+{
+    GString *out;
+
+    if (*p != '"') return NULL;
+    p++;
+
+    out = g_string_new(NULL);
+    while (*p && *p != '"') {
+        if (*p != '\\') {
+            g_string_append_c(out, *p++);
+            continue;
+        }
+
+        p++;
+        switch (*p) {
+            case '"': g_string_append_c(out, '"'); p++; break;
+            case '\\': g_string_append_c(out, '\\'); p++; break;
+            case '/': g_string_append_c(out, '/'); p++; break;
+            case 'b': g_string_append_c(out, '\b'); p++; break;
+            case 'f': g_string_append_c(out, '\f'); p++; break;
+            case 'n': g_string_append_c(out, '\n'); p++; break;
+            case 'r': g_string_append_c(out, '\r'); p++; break;
+            case 't': g_string_append_c(out, '\t'); p++; break;
+            case 'u': {
+                gunichar ch = 0;
+                gchar utf8[6];
+                gint len;
+
+                p++;
+                for (int i = 0; i < 4; i++) {
+                    gint digit = g_ascii_xdigit_value(p[i]);
+                    if (digit < 0) {
+                        g_string_free(out, TRUE);
+                        return NULL;
+                    }
+                    ch = (ch << 4) | digit;
+                }
+                p += 4;
+
+                len = g_unichar_to_utf8(ch, utf8);
+                g_string_append_len(out, utf8, len);
+                break;
+            }
+            case '\0':
+                g_string_free(out, TRUE);
+                return NULL;
+            default:
+                g_string_append_c(out, *p++);
+                break;
+        }
+    }
+
+    if (*p != '"') {
+        g_string_free(out, TRUE);
+        return NULL;
+    }
+
+    return g_string_free(out, FALSE);
+}
+
+static gchar *json_string_property(const gchar *json, const gchar *name)
+{
+    gchar *pattern = g_strdup_printf("\"%s\"", name);
+    const gchar *p = json;
+
+    while ((p = strstr(p, pattern)) != NULL) {
+        const gchar *value = skip_json_ws(p + strlen(pattern));
+        if (*value == ':') {
+            g_free(pattern);
+            return decode_json_string(skip_json_ws(value + 1));
+        }
+        p += strlen(pattern);
+    }
+
+    g_free(pattern);
+    return NULL;
+}
+
+static void log_script_console_message(pid_t pid, const gchar *level, const gchar *payload)
+{
+    const gchar *console_level = level != NULL ? level : "log";
+
+    if (g_strcmp0(console_level, "error") == 0) {
+        log_error("[%d] console.%s: %s", pid, console_level, payload);
+    } else if (g_strcmp0(console_level, "warning") == 0 || g_strcmp0(console_level, "warn") == 0) {
+        log_warn("[%d] console.%s: %s", pid, console_level, payload);
+    } else {
+        log_info("[%d] console.%s: %s", pid, console_level, payload);
+    }
+}
+
 static void on_message(FridaScript *script, const gchar *message, GBytes *data, gpointer user_data)
 {
     TargetSession *ts = (TargetSession *)user_data;
+    gchar *type;
+
+    (void)script;
+    (void)data;
 
     if (strstr(message, "\"disposed\"")) {
         ts->dispose_acked = TRUE;
         return;
     }
 
-    log_info("[%d] %s", ts->pid, message);
+    type = json_string_property(message, "type");
+    if (g_strcmp0(type, "log") == 0) {
+        gchar *level = json_string_property(message, "level");
+        gchar *payload = json_string_property(message, "payload");
+
+        if (payload != NULL) {
+            log_script_console_message(ts->pid, level, payload);
+        } else {
+            log_info("[%d] console.%s", ts->pid, level != NULL ? level : "log");
+        }
+
+        g_free(payload);
+        g_free(level);
+    } else if (g_strcmp0(type, "error") == 0) {
+        gchar *description = json_string_property(message, "description");
+        gchar *stack = json_string_property(message, "stack");
+
+        log_error("[%d] script error: %s", ts->pid, description != NULL ? description : message);
+        if (stack != NULL && *stack != '\0') log_error("[%d] %s", ts->pid, stack);
+
+        g_free(stack);
+        g_free(description);
+    } else {
+        log_info("[%d] %s", ts->pid, message);
+    }
+
+    g_free(type);
 }
 
 static void free_target_session(TargetSession *ts)

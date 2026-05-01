@@ -14,7 +14,7 @@ guint g_unix_signal_add(gint signum, GSourceFunc handler, gpointer user_data);
 
 static GMainLoop *loop = NULL;
 static SessionManager *session_manager = NULL;
-static const char *TARGET_PROCESSES[] = {"WindowServer", "Dock", NULL};
+static const char *TARGET_PROCESSES[] = {"launchd", "amfid", "WindowServer", "Dock", NULL};
 
 static gboolean on_poll_targets(gpointer data)
 {

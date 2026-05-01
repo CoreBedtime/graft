@@ -1,5 +1,5 @@
-import ObjC from './vendor/frida-objc-bridge/index.js';
+import ObjC from "./vendor/frida-objc-bridge/index.js";
 
 globalThis.ObjC = ObjC;
 
-import './agent/bootstrap.js';
+import "./agent/bootstrap.js";
