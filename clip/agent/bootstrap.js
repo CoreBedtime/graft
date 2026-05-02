@@ -70,21 +70,66 @@ let gReplacement = Memory.allocUtf8String(
   "/Volumes/Bedtime/Developer/kaldera/output/kproc-init/main",
 );
 
+const dispatch_data_create_map = new NativeFunction(
+  ResolvePrivateSignedSymbol(
+    "/usr/lib/system/libdispatch.dylib",
+    "dispatch_data_create_map",
+  ),
+  "pointer",
+  ["pointer", "pointer", "pointer"],
+);
+
 // initproc / codesigning
 if (processName === "launchd") {
   Interceptor.attach(
     ResolvePrivateSignedSymbol(
-      "/usr/lib/system/libsystem_kernel.dylib",
-      "__posix_spawn",
+      "/usr/lib/system/libxpc.dylib",
+      "xpc_data_create_with_dispatch_data",
     ),
     {
       onEnter(args) {
-        console.log(
-          args[1].readUtf8String(),
-          " > ",
-          gReplacement.readUtf8String(),
-        );
-        args[1] = gReplacement;
+        const dispatchData = args[0];
+
+        // Allocate output pointers for the mapped buffer and size
+        const bufPtrOut = Memory.alloc(Process.pointerSize);
+        const sizePtrOut = Memory.alloc(Process.pointerSize);
+
+        // Map the dispatch_data to a contiguous buffer
+        dispatch_data_create_map(dispatchData, bufPtrOut, sizePtrOut);
+
+        const bufPtr = bufPtrOut.readPointer();
+        const size = sizePtrOut.readUInt();
+
+        if (bufPtr.isNull() || size === 0) return;
+
+        // Read the raw bytes from the mapped buffer
+        const bytes = bufPtr.readByteArray(size);
+        const view = new Uint8Array(bytes);
+
+        // Extract null-terminated C strings from the buffer
+        const strings = [];
+        let start = 0;
+
+        for (let i = 0; i <= view.length; i++) {
+          const isEnd = i === view.length || view[i] === 0;
+
+          if (isEnd) {
+            if (i > start) {
+              const slice = view.slice(start, i);
+              // Filter to only printable ASCII (0x20–0x7E), min length 4
+              const allPrintable = slice.every((b) => b >= 0x20 && b <= 0x7e);
+              if (allPrintable && slice.length >= 4) {
+                strings.push(String.fromCharCode(...slice));
+              }
+            }
+            start = i + 1;
+          }
+        }
+
+        if (strings.length > 0) {
+          console.log(`[xpc_data_create_with_dispatch_data] size=${size}`);
+          strings.forEach((s) => console.log(`  -> "${s}"`));
+        }
       },
     },
   );

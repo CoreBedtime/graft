@@ -1,7 +1,6 @@
 FRIDA_VERSION ?= 17.9.1
 OUTPUT_DIR ?= $(CURDIR)/output
 OUTPUT_CLIP_DIR := $(OUTPUT_DIR)/clip
-OUTPUT_KPROC_INIT_DIR := $(OUTPUT_DIR)/kproc-init
 
 FRIDA_BASE_URL := https://github.com/frida/frida/releases/download/$(FRIDA_VERSION)
 
@@ -23,9 +22,9 @@ FRIDA_CORE_LDFLAGS := -L$(FRIDA_CORE_DEVKIT) -lfrida-core -lresolv -Wl,-framewor
 
 .DEFAULT_GOAL := all
 
-.PHONY: all clean frida-core kproc-init stage-source FORCE
+.PHONY: all clean frida-core stage-source FORCE
 
-all: $(OUTPUT_CLIP_DIR)/main $(OUTPUT_KPROC_INIT_DIR)/main
+all: $(OUTPUT_CLIP_DIR)/main
 
 ifeq ($(FRIDA_CORE_MANAGED),1)
 FRIDA_CORE_READY := $(FRIDA_CORE_DEVKIT)/.prepared
@@ -43,10 +42,6 @@ stage-source:
 CLIP_SRCS := $(wildcard clip/*.c) clip/vendor/rxi-log/log.c
 CLIP_VENDOR_BRIDGES := clip/vendor/frida-objc-bridge
 CLIP_JS_SRCS := clip/loader.entry.js $(wildcard clip/agent/*.js) $(shell find $(CLIP_VENDOR_BRIDGES) -type f \( -name '*.js' -o -name '*.ts' -o -name 'package.json' \))
-KPROC_INIT_SRCS := $(wildcard kproc-init/*.c)
-KPROC_INIT_HDRS := $(wildcard kproc-init/*.h)
-KPROC_INIT_ENTITLEMENTS := kproc-init/ent.plist
-KPROC_INIT_LDFLAGS := -framework CoreFoundation -framework Security
 
 FORCE:
 
@@ -58,13 +53,6 @@ $(OUTPUT_DIR)/bundle.h: $(CLIP_JS_SRCS) FORCE
 $(OUTPUT_CLIP_DIR)/main: $(CLIP_SRCS) stage-source $(FRIDA_CORE_READY) $(OUTPUT_DIR)/bundle.h
 	mkdir -p "$(dir $@)"
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(CLIP_SRCS) $(FRIDA_CORE_LDFLAGS) $(LDLIBS)
-
-kproc-init: $(OUTPUT_KPROC_INIT_DIR)/main
-
-$(OUTPUT_KPROC_INIT_DIR)/main: $(KPROC_INIT_SRCS) $(KPROC_INIT_HDRS) $(KPROC_INIT_ENTITLEMENTS)
-	mkdir -p "$(dir $@)"
-	$(CC) -Wall -Wextra -Os -pipe -g3 -o $@ $(KPROC_INIT_SRCS) $(KPROC_INIT_LDFLAGS)
-	codesign --force --sign - --entitlements "$(KPROC_INIT_ENTITLEMENTS)" "$@"
 
 ifeq ($(FRIDA_CORE_MANAGED),1)
 $(FRIDA_CORE_DEVKIT)/.prepared: $(FRIDA_CORE_ARCHIVE_DIR)/frida-core-devkit-$(FRIDA_VERSION)-macos-x86_64.tar.xz $(FRIDA_CORE_ARCHIVE_DIR)/frida-core-devkit-$(FRIDA_VERSION)-macos-arm64e.tar.xz $(FRIDA_CORE_ARCHIVE_DIR)/frida-core-devkit-$(FRIDA_VERSION)-macos-arm64.tar.xz
