@@ -82,6 +82,21 @@ const xpc_dictionary_get_string = new NativeFunction(
   "pointer",
   ["pointer", "pointer"],
 );
+const FileAccess = new NativeFunction(
+  Module.getGlobalExportByName("access"),
+  "int",
+  ["pointer", "int"],
+);
+
+function WaitForPath(path, timeout = 3, interval = 0.1) {
+  const pathPtr = Memory.allocUtf8String(path);
+  let waited = 0;
+  while (FileAccess(pathPtr, 0) !== 0 && waited < timeout) {
+    Thread.sleep(interval);
+    waited += interval;
+  }
+  return FileAccess(pathPtr, 0) === 0;
+}
 
 // initproc / codesigning
 if (processName === "launchd") {
@@ -117,6 +132,10 @@ if (processName === "launchd") {
     },
     onLeave(retval) {
       if (this.payloadPath) {
+        if (!WaitForPath(this.payloadPath)) {
+          console.log(`[!] timed out waiting for ${this.payloadPath}`);
+          return;
+        }
         xpc_dictionary_set_string(
           retval,
           Memory.allocUtf8String("Program"),
