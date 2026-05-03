@@ -1,7 +1,14 @@
 #include "log.h"
 #include "session.h"
+#include "process.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <mach/mach_vm.h>
+#include <mach/mach_types.h>
+#include <mach/mach.h>
+#include <sys/signal.h>
 
 typedef struct {
     pid_t pid;
@@ -102,6 +109,7 @@ static gchar *json_string_property(const gchar *json, const gchar *name)
     return NULL;
 }
 
+
 static void log_script_console_message(pid_t pid, const gchar *level, const gchar *payload)
 {
     const gchar *console_level = level != NULL ? level : "log";
@@ -150,6 +158,97 @@ static void on_message(FridaScript *script, const gchar *message, GBytes *data, 
 
         g_free(stack);
         g_free(description);
+    } else if (g_strcmp0(type, "send") == 0) {
+        JsonParser *parser = json_parser_new();
+        if (json_parser_load_from_data(parser, message, -1, NULL)) {
+            JsonNode *root = json_parser_get_root(parser);
+            if (JSON_NODE_HOLDS_OBJECT(root)) {
+                JsonObject *obj = json_node_get_object(root);
+                if (json_object_has_member(obj, "payload")) {
+                    JsonNode *payload_node = json_object_get_member(obj, "payload");
+                    if (JSON_NODE_HOLDS_OBJECT(payload_node)) {
+                        JsonObject *payload = json_node_get_object(payload_node);
+                        if (g_strcmp0(json_object_get_string_member_with_default(payload, "type", ""), "launch_request") == 0) {
+                            /*
+                             * This is the actual process spawner used by the host side.
+                             *
+                             * The Frida script hooks __posix_spawn inside xpcproxy and patches
+                             * its normal behavior by forcing the spawn into a suspended state (and, in
+                             * our flow, effectively preventing xpcproxy from being responsible for the
+                             * real launch lifecycle).
+                             *
+                             * Once the hook reports the event back through the launch_request flow,
+                             * we reconstruct the intended launch parameters from the JSON payload:
+                             *
+                             *   - path  -> executable path
+                             *   - argv  -> argument vector
+                             *   - envp  -> environment vector (optional)
+                             *
+                             * and explicitly call process_spawn() ourselves.
+                             *
+                             * xpcproxy is forced to do no spawn via some patch.
+                             */
+                            const gchar *path = json_object_get_string_member_with_default(payload, "path", NULL);
+
+                            char * __TweakedBin = getready_process(path);
+
+                            if (__TweakedBin != NULL) {
+                                /*
+                                    * Send reply back to JS:
+                                    *
+                                    * recv("new_path", ...)
+                                    *
+                                    * expects:
+                                    *
+                                    * {
+                                    *   "type": "send",
+                                    *   "payload": {
+                                    *     "type": "new_path",
+                                    *     "path": "..."
+                                    *   }
+                                    * }
+                                    */
+
+                                JsonBuilder *builder = json_builder_new();
+                                json_builder_begin_object(builder);
+                                    json_builder_set_member_name(builder, "type");
+                                    json_builder_add_string_value(builder, "send");
+                                    json_builder_set_member_name(builder, "payload");
+                                    json_builder_begin_object(builder);
+                                        json_builder_set_member_name(builder, "type");
+                                        json_builder_add_string_value(builder, "new_path");
+                                        json_builder_set_member_name(builder, "path");
+                                        json_builder_add_string_value(builder, __TweakedBin);
+                                    json_builder_end_object(builder);
+                                json_builder_end_object(builder);
+
+                                JsonGenerator *gen = json_generator_new();
+                                JsonNode *root = json_builder_get_root(builder);
+                                json_generator_set_root(gen, root);
+                                gchar *reply = json_generator_to_data(gen, NULL);
+
+                                frida_script_post(script, reply, NULL);
+
+                                g_free(reply);
+                                json_node_free(root);
+                                g_object_unref(gen);
+                                g_object_unref(builder);
+                                free(__TweakedBin);
+                            }
+                        }
+                    } else {
+                        log_info("[%d] %s", ts->pid, message);
+                    }
+                } else {
+                    log_info("[%d] %s", ts->pid, message);
+                }
+            } else {
+                log_info("[%d] %s", ts->pid, message);
+            }
+        } else {
+            log_info("[%d] %s", ts->pid, message);
+        }
+        g_object_unref(parser);
     } else {
         log_info("[%d] %s", ts->pid, message);
     }

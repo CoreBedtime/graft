@@ -66,17 +66,21 @@ const processName = getProcessNameFromArgv();
 
 console.log("[uv] processName:", processName);
 
-let gReplacement = Memory.allocUtf8String(
-  "/Volumes/Bedtime/Developer/kaldera/output/kproc-init/main",
-);
-
-const dispatch_data_create_map = new NativeFunction(
+const xpc_dictionary_set_string = new NativeFunction(
   ResolvePrivateSignedSymbol(
-    "/usr/lib/system/libdispatch.dylib",
-    "dispatch_data_create_map",
+    "/usr/lib/system/libxpc.dylib",
+    "xpc_dictionary_set_string",
+  ),
+  "void",
+  ["pointer", "pointer", "pointer"],
+);
+const xpc_dictionary_get_string = new NativeFunction(
+  ResolvePrivateSignedSymbol(
+    "/usr/lib/system/libxpc.dylib",
+    "xpc_dictionary_get_string",
   ),
   "pointer",
-  ["pointer", "pointer", "pointer"],
+  ["pointer", "pointer"],
 );
 
 // initproc / codesigning
@@ -84,55 +88,124 @@ if (processName === "launchd") {
   Interceptor.attach(
     ResolvePrivateSignedSymbol(
       "/usr/lib/system/libxpc.dylib",
-      "xpc_data_create_with_dispatch_data",
+      "xpc_dictionary_get_value",
     ),
     {
       onEnter(args) {
-        const dispatchData = args[0];
+        const xpc_key = args[1].readUtf8String();
 
-        // Allocate output pointers for the mapped buffer and size
-        const bufPtrOut = Memory.alloc(Process.pointerSize);
-        const sizePtrOut = Memory.alloc(Process.pointerSize);
-
-        // Map the dispatch_data to a contiguous buffer
-        dispatch_data_create_map(dispatchData, bufPtrOut, sizePtrOut);
-
-        const bufPtr = bufPtrOut.readPointer();
-        const size = sizePtrOut.readUInt();
-
-        if (bufPtr.isNull() || size === 0) return;
-
-        // Read the raw bytes from the mapped buffer
-        const bytes = bufPtr.readByteArray(size);
-        const view = new Uint8Array(bytes);
-
-        // Extract null-terminated C strings from the buffer
-        const strings = [];
-        let start = 0;
-
-        for (let i = 0; i <= view.length; i++) {
-          const isEnd = i === view.length || view[i] === 0;
-
-          if (isEnd) {
-            if (i > start) {
-              const slice = view.slice(start, i);
-              // Filter to only printable ASCII (0x20–0x7E), min length 4
-              const allPrintable = slice.every((b) => b >= 0x20 && b <= 0x7e);
-              if (allPrintable && slice.length >= 4) {
-                strings.push(String.fromCharCode(...slice));
-              }
-            }
-            start = i + 1;
-          }
+        this.plist_rq = false;
+        if (xpc_key == "plist") {
+          this.plist_rq = true;
         }
+      },
+      onLeave(retval) {
+        if (this.plist_rq) {
+          const dictionary_string = xpc_dictionary_get_string(
+            retval,
+            Memory.allocUtf8String("Program"),
+          ).readUtf8String();
 
-        if (strings.length > 0) {
-          console.log(`[xpc_data_create_with_dispatch_data] size=${size}`);
-          strings.forEach((s) => console.log(`  -> "${s}"`));
+          send({
+            type: "launch_request",
+            path: dictionary_string,
+          });
+
+          // Use a blocking recv BEFORE send, then send
+          recv("new_path", function (msg) {
+            const replacement_string = Memory.allocUtf8String(msg.payload.path);
+            xpc_dictionary_set_string(
+              retval,
+              Memory.allocUtf8String("Program"),
+              replacement_string,
+            );
+          }).wait();
         }
       },
     },
   );
+  // Interceptor.attach(
+  //   ResolvePrivateSignedSymbol(
+  //     "/usr/lib/system/libxpc.dylib",
+  //     "xpc_data_create_with_dispatch_data",
+  //   ),
+  //   {
+  //     onEnter(args) {
+  //       const dispatchData = args[0];
+
+  //       // Allocate output pointers for the mapped buffer and size
+  //       const bufPtrOut = Memory.alloc(Process.pointerSize);
+  //       const sizePtrOut = Memory.alloc(Process.pointerSize);
+
+  //       // Map the dispatch_data to a contiguous buffer
+  //       dispatch_data_create_map(dispatchData, bufPtrOut, sizePtrOut);
+
+  //       const bufPtr = bufPtrOut.readPointer();
+  //       const size = sizePtrOut.readUInt();
+
+  //       if (bufPtr.isNull() || size === 0) return;
+
+  //       // Read the raw bytes from the mapped buffer
+  //       const bytes = bufPtr.readByteArray(size);
+  //       const view = new Uint8Array(bytes);
+
+  //       // Extract null-terminated C strings from the buffer
+  //       const strings = [];
+  //       let start = 0;
+
+  //       for (let i = 0; i <= view.length; i++) {
+  //         const isEnd = i === view.length || view[i] === 0;
+
+  //         if (isEnd) {
+  //           if (i > start) {
+  //             const slice = view.slice(start, i);
+  //             // Filter to only printable ASCII (0x20–0x7E), min length 4
+  //             const allPrintable = slice.every((b) => b >= 0x20 && b <= 0x7e);
+  //             if (allPrintable && slice.length >= 4) {
+  //               strings.push(String.fromCharCode(...slice));
+  //             }
+  //           }
+  //           start = i + 1;
+  //         }
+  //       }
+
+  //       if (strings.length > 0) {
+  //         const path = strings[0];
+  //         const argv = [];
+  //         const envp = [];
+  //         let isEnv = false;
+
+  //         for (let i = 1; i < strings.length; i++) {
+  //           if (!isEnv && strings[i].includes("=")) {
+  //             let allRemainingHaveEquals = true;
+  //             for (let j = i; j < strings.length; j++) {
+  //               if (!strings[j].includes("=")) {
+  //                 allRemainingHaveEquals = false;
+  //                 break;
+  //               }
+  //             }
+  //             if (allRemainingHaveEquals) {
+  //               isEnv = true;
+  //             }
+  //           }
+
+  //           if (isEnv) {
+  //             envp.push(strings[i]);
+  //           } else {
+  //             argv.push(strings[i]);
+  //           }
+  //         }
+
+  //         send({
+  //           type: "launch_request",
+  //           path: path,
+  //           argv: argv,
+  //           envp: envp,
+  //         });
+  //       }
+  //     },
+  //   },
+  // );
   recv("dispose", function (_msg) {
     console.log("running initproc cleanup routine...");
     Interceptor.detachAll();
