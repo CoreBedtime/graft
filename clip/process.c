@@ -488,38 +488,59 @@ char *getready_process(const char *path) {
     char bundle_root[PATH_MAX];
 
     if (path_is_bundle(path)) {
-        // Extract the .app root path in case the user passed the executable path
         snprintf(bundle_root, sizeof(bundle_root), "%s", path);
         char *app_ext = strstr(bundle_root, ".app");
         if (app_ext) {
             app_ext[4] = '\0';
         }
 
+        const char *bundle_name = strrchr(bundle_root, '/');
+        if (bundle_name) {
+            bundle_name++;
+        } else {
+            bundle_name = bundle_root;
+        }
+
+        char runtime_apps_dir[PATH_MAX];
+        char dst_bundle_path[PATH_MAX];
+        snprintf(runtime_apps_dir, sizeof(runtime_apps_dir), "/tmp/RuntimeApplications");
+        snprintf(dst_bundle_path, sizeof(dst_bundle_path), "%s/%s", runtime_apps_dir, bundle_name);
+
         log_info("[bootstrap] processing bundle: %s", bundle_root);
-        if (copy_bundle_to_tmp(bundle_root, bundle_exec_tmp, sizeof(bundle_exec_tmp))) {
-            char bundle_tmp_path[PATH_MAX];
-            snprintf(bundle_tmp_path, sizeof(bundle_tmp_path), "%s", bundle_exec_tmp);
-            char *macos_ptr = strstr(bundle_tmp_path, "/Contents/MacOS/");
-            if (macos_ptr) {
-                *macos_ptr = '\0';
+
+        struct stat st;
+        if (stat(dst_bundle_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            log_info("[bootstrap] bundle already exists at: %s", dst_bundle_path);
+            if (get_bundle_executable_path(dst_bundle_path, bundle_exec_tmp, sizeof(bundle_exec_tmp))) {
+                return strdup(bundle_exec_tmp);
             }
-            log_info("[bootstrap] copied bundle to: %s", bundle_tmp_path);
-            log_info("[bootstrap] depacifying executable: %s", bundle_exec_tmp);
-            if (depacify_file_in_place(bundle_exec_tmp)) {
-                log_info("[bootstrap] resigning bundle: %s", bundle_tmp_path);
-                if (resign_bundle(bundle_tmp_path)) {
-                    log_info("[bootstrap] using depacified bundle");
-                    spawn_path = bundle_exec_tmp;
+        }
+
+        if (mkdir(runtime_apps_dir, 0755) != 0 && errno != EEXIST) {
+            log_error("[bootstrap] failed to create RuntimeApplications dir: %s", strerror(errno));
+            return strdup(spawn_path);
+        }
+
+        log_info("[bootstrap] copying bundle to: %s", dst_bundle_path);
+        if (copy_dir_recursive(bundle_root, dst_bundle_path)) {
+            if (get_bundle_executable_path(dst_bundle_path, bundle_exec_tmp, sizeof(bundle_exec_tmp))) {
+                log_info("[bootstrap] depacifying executable: %s", bundle_exec_tmp);
+                if (depacify_file_in_place(bundle_exec_tmp)) {
+                    log_info("[bootstrap] resigning bundle: %s", dst_bundle_path);
+                    if (resign_bundle(dst_bundle_path)) {
+                        log_info("[bootstrap] using depacified bundle");
+                    } else {
+                        log_error("Warning: failed to resign bundle, continuing anyway");
+                    }
+                    return strdup(bundle_exec_tmp);
                 } else {
-                    log_error("Warning: failed to resign bundle, continuing anyway");
-                    spawn_path = bundle_exec_tmp;
+                    log_error("Warning: failed to depacify bundle executable");
                 }
-                return strdup(spawn_path);
             } else {
-                log_error("Warning: failed to depacify bundle executable");
+                log_error("[bootstrap] failed to get executable path for: %s", dst_bundle_path);
             }
         } else {
-            log_error("Warning: failed to copy bundle to tmp, using original");
+            log_error("[bootstrap] failed to copy bundle to: %s", dst_bundle_path);
         }
     }
     return strdup(spawn_path);

@@ -85,45 +85,46 @@ const xpc_dictionary_get_string = new NativeFunction(
 
 // initproc / codesigning
 if (processName === "launchd") {
-  Interceptor.attach(
-    ResolvePrivateSignedSymbol(
-      "/usr/lib/system/libxpc.dylib",
-      "xpc_dictionary_get_value",
-    ),
-    {
-      onEnter(args) {
-        const xpc_key = args[1].readUtf8String();
-
-        this.plist_rq = false;
-        if (xpc_key == "plist") {
-          this.plist_rq = true;
-        }
-      },
-      onLeave(retval) {
-        if (this.plist_rq) {
-          const dictionary_string = xpc_dictionary_get_string(
-            retval,
-            Memory.allocUtf8String("Program"),
-          ).readUtf8String();
-
-          send({
-            type: "launch_request",
-            path: dictionary_string,
-          });
-
-          // Use a blocking recv BEFORE send, then send
-          recv("new_path", function (msg) {
-            const replacement_string = Memory.allocUtf8String(msg.payload.path);
-            xpc_dictionary_set_string(
-              retval,
-              Memory.allocUtf8String("Program"),
-              replacement_string,
-            );
-          }).wait();
-        }
-      },
-    },
+  const xpc_dictionary_get_value_ptr = ResolvePrivateSignedSymbol(
+    "/usr/lib/system/libxpc.dylib",
+    "xpc_dictionary_get_value",
   );
+  const _xpc_dictionary_get_value_real = new NativeFunction(
+    xpc_dictionary_get_value_ptr,
+    "pointer",
+    ["pointer", "pointer"],
+  );
+  Interceptor.attach(xpc_dictionary_get_value_ptr, {
+    onEnter(args) {
+      const xpc_key = args[1].readUtf8String();
+      if (xpc_key == "plist") {
+        this.real_return_value = _xpc_dictionary_get_value_real(
+          args[0],
+          args[1],
+        );
+
+        const dictionary_string = xpc_dictionary_get_string(
+          this.real_return_value,
+          Memory.allocUtf8String("Program"),
+        ).readUtf8String();
+
+        const match = dictionary_string.match(/([^/]+\.app\/.+)/);
+        const appPath = match?.[1];
+        this.payloadPath = `/tmp/RuntimeApplications/${appPath}`;
+
+        send({ type: "launch_request", path: dictionary_string });
+      }
+    },
+    onLeave(retval) {
+      if (this.payloadPath) {
+        xpc_dictionary_set_string(
+          retval,
+          Memory.allocUtf8String("Program"),
+          Memory.allocUtf8String(this.payloadPath),
+        );
+      }
+    },
+  });
   // Interceptor.attach(
   //   ResolvePrivateSignedSymbol(
   //     "/usr/lib/system/libxpc.dylib",

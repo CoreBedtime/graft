@@ -9,6 +9,7 @@
 #include <mach/mach_types.h>
 #include <mach/mach.h>
 #include <sys/signal.h>
+#include <unistd.h>
 
 typedef struct {
     pid_t pid;
@@ -189,52 +190,7 @@ static void on_message(FridaScript *script, const gchar *message, GBytes *data, 
                              * xpcproxy is forced to do no spawn via some patch.
                              */
                             const gchar *path = json_object_get_string_member_with_default(payload, "path", NULL);
-
-                            char * __TweakedBin = getready_process(path);
-
-                            if (__TweakedBin != NULL) {
-                                /*
-                                    * Send reply back to JS:
-                                    *
-                                    * recv("new_path", ...)
-                                    *
-                                    * expects:
-                                    *
-                                    * {
-                                    *   "type": "send",
-                                    *   "payload": {
-                                    *     "type": "new_path",
-                                    *     "path": "..."
-                                    *   }
-                                    * }
-                                    */
-
-                                JsonBuilder *builder = json_builder_new();
-                                json_builder_begin_object(builder);
-                                    json_builder_set_member_name(builder, "type");
-                                    json_builder_add_string_value(builder, "send");
-                                    json_builder_set_member_name(builder, "payload");
-                                    json_builder_begin_object(builder);
-                                        json_builder_set_member_name(builder, "type");
-                                        json_builder_add_string_value(builder, "new_path");
-                                        json_builder_set_member_name(builder, "path");
-                                        json_builder_add_string_value(builder, __TweakedBin);
-                                    json_builder_end_object(builder);
-                                json_builder_end_object(builder);
-
-                                JsonGenerator *gen = json_generator_new();
-                                JsonNode *root = json_builder_get_root(builder);
-                                json_generator_set_root(gen, root);
-                                gchar *reply = json_generator_to_data(gen, NULL);
-
-                                frida_script_post(script, reply, NULL);
-
-                                g_free(reply);
-                                json_node_free(root);
-                                g_object_unref(gen);
-                                g_object_unref(builder);
-                                free(__TweakedBin);
-                            }
+                            getready_process(path);
                         }
                     } else {
                         log_info("[%d] %s", ts->pid, message);
