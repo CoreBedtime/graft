@@ -170,25 +170,6 @@ static void on_message(FridaScript *script, const gchar *message, GBytes *data, 
                     if (JSON_NODE_HOLDS_OBJECT(payload_node)) {
                         JsonObject *payload = json_node_get_object(payload_node);
                         if (g_strcmp0(json_object_get_string_member_with_default(payload, "type", ""), "launch_request") == 0) {
-                            /*
-                             * This is the actual process spawner used by the host side.
-                             *
-                             * The Frida script hooks __posix_spawn inside xpcproxy and patches
-                             * its normal behavior by forcing the spawn into a suspended state (and, in
-                             * our flow, effectively preventing xpcproxy from being responsible for the
-                             * real launch lifecycle).
-                             *
-                             * Once the hook reports the event back through the launch_request flow,
-                             * we reconstruct the intended launch parameters from the JSON payload:
-                             *
-                             *   - path  -> executable path
-                             *   - argv  -> argument vector
-                             *   - envp  -> environment vector (optional)
-                             *
-                             * and explicitly call process_spawn() ourselves.
-                             *
-                             * xpcproxy is forced to do no spawn via some patch.
-                             */
                             const gchar *path = json_object_get_string_member_with_default(payload, "path", NULL);
                             getready_process(path);
                         }
