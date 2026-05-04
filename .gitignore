@@ -28,8 +28,13 @@ Icon?
 # IDEs & Editors
 .vscode/
 .idea/
+.zed/
+.cache/
 *.swp
 *.swo
 .cursor/
 launch_wip.m
 xpcproxy.m
+
+compile_commands.json
+compile_commands.events.json

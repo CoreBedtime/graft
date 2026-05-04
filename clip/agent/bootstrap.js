@@ -82,6 +82,15 @@ const xpc_dictionary_get_string = new NativeFunction(
   "pointer",
   ["pointer", "pointer"],
 );
+const xpc_copy_description = new NativeFunction(
+  ResolvePrivateSignedSymbol(
+    "/usr/lib/system/libxpc.dylib",
+    "xpc_copy_description",
+  ),
+  "pointer",
+  ["pointer"],
+);
+
 const FileAccess = new NativeFunction(
   Module.getGlobalExportByName("access"),
   "int",
@@ -136,6 +145,26 @@ if (processName === "launchd") {
           console.log(`[!] timed out waiting for ${this.payloadPath}`);
           return;
         }
+
+        // env fudge
+        const env = _xpc_dictionary_get_value_real(
+          retval,
+          Memory.allocUtf8String("EnvironmentVariables"),
+        );
+        if (!env.isNull()) {
+          xpc_dictionary_set_string(
+            env,
+            Memory.allocUtf8String("DYLD_INSERT_LIBRARIES"),
+            Memory.allocUtf8String(
+              "/Volumes/Bedtime/Developer/kaldera/output/clip/extension.dylib",
+            ),
+          );
+        } else {
+          const desc = xpc_copy_description(retval).readUtf8String();
+          console.log("meh copy_description gave ", desc);
+        }
+
+        // prog swap
         xpc_dictionary_set_string(
           retval,
           Memory.allocUtf8String("Program"),
