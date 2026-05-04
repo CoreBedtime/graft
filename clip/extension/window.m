@@ -1,6 +1,7 @@
 #import "window.h"
 #include <AppKit/AppKit.h>
 #include <Foundation/Foundation.h>
+#include <objc/runtime.h>
 
 static CFMutableArrayRef gFrameRegistry = NULL;
 
@@ -19,7 +20,6 @@ void SyncFrameToWindow(EXWindowFrame *frame) {
         (int)syncedFrame.size.width,
         (int)syncedFrame.size.height
     );
-    gtk_window_set_decorated(GTK_WINDOW(frame->window), false);
 
     [frame->handle addChildWindow:actual ordered:NSWindowAbove];
 
@@ -42,6 +42,45 @@ void SyncFrameToWindow(EXWindowFrame *frame) {
     [[actual standardWindowButton:NSWindowZoomButton] setHidden:YES];
 }
 
+static void OnDrag(GtkGestureDrag *gesture, double x, double y, gpointer user_data) {
+    EXWindowFrame *frame = (EXWindowFrame *)user_data;
+    GdkSurface *surface = frame->surface;
+    if (GDK_IS_TOPLEVEL(surface)) {
+        GdkEvent *event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(gesture));
+        GdkDevice *device = gdk_event_get_device(event);
+        int button = (int)gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
+        guint32 timestamp = gtk_event_controller_get_current_event_time(GTK_EVENT_CONTROLLER(gesture));
+        if (device) {
+            gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), device, button, x, y, timestamp);
+        }
+    }
+}
+
+EXWindowFrame *MakeFrameFor(NSWindow *actualWindow) {
+    EnsureRegistry();
+    EXWindowFrame *frame = g_new0(EXWindowFrame, 1);
+    frame->actualWindow = (__bridge_retained void *)actualWindow;
+    frame->window = gtk_window_new();
+
+    gtk_window_set_decorated(GTK_WINDOW(frame->window), false);
+
+    gtk_widget_set_visible(frame->window, TRUE);
+    frame->surface = gtk_native_get_surface(GTK_NATIVE(frame->window));
+    frame->handle = gdk_macos_surface_get_native_window(frame->surface);
+
+    // Initial sync
+    SyncFrameToWindow(frame);
+
+    // Enable dragging anywhere on the surface
+    GtkGesture *drag = gtk_gesture_drag_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(drag), 0); // all buttons
+    g_signal_connect(drag, "drag-begin", G_CALLBACK(OnDrag), frame);
+    gtk_widget_add_controller(frame->window, GTK_EVENT_CONTROLLER(drag));
+
+    CFArrayAppendValue(gFrameRegistry, frame);
+    return frame;
+}
+
 bool IsFrameHandle(NSWindow *window) {
     if (!gFrameRegistry) return false;
     CFIndex count = CFArrayGetCount(gFrameRegistry);
@@ -50,22 +89,6 @@ bool IsFrameHandle(NSWindow *window) {
         if (frame->handle == window) return true;
     }
     return false;
-}
-
-EXWindowFrame *MakeFrameFor(NSWindow *actualWindow) {
-    EnsureRegistry();
-    EXWindowFrame *frame = g_new0(EXWindowFrame, 1);
-    frame->actualWindow = (__bridge_retained void *)actualWindow;
-    frame->window = gtk_window_new();
-    gtk_widget_set_visible(frame->window, TRUE);
-    frame->surface = gtk_native_get_surface(GTK_NATIVE(frame->window));
-    frame->handle = gdk_macos_surface_get_native_window(frame->surface);
-
-    // Initial sync
-    SyncFrameToWindow(frame);
-
-    CFArrayAppendValue(gFrameRegistry, frame);
-    return frame;
 }
 
 EXWindowFrame *FindFrameForWindow(NSWindow *actualWindow) {
